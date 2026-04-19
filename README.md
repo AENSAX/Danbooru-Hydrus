@@ -91,3 +91,5 @@ solo 单独人物
 - PMTagger 服务配置
 - PMDanBooruSpider 用法
 - PMImageSpider 用法
+
+翻译文件来自：https://github.com/DominikDoom/a1111-sd-webui-tagcomplete/discussions/23
