@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PMTagger</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <div class="page-shell">
+    <main class="layout-grid">
+      <section class="panel hero-panel">
+        <div class="hero-copy">
+          <p class="eyebrow">PINK MERCY</p>
+          <h1>PMTagger</h1>
+          <p class="hero-desc">本地图片自动打标、翻译并上传到 Hydrus</p>
+        </div>
+        <img
+          class="hero-decoration"
+          src="/static/decorations/HeadImage.jpg"
+          alt="decorative artwork"
+        >
+      </section>
+
+      <section class="panel connection-panel">
+        <div class="panel-head">
+          <h2>连接检测</h2>
+        </div>
+        <div class="connection-list">
+          <div class="connection-item">
+            <span>服务状态</span>
+            <strong id="service-status-text">未检测</strong>
+          </div>
+          <div class="connection-item">
+            <span>推理设备</span>
+            <strong id="device-status-text">-</strong>
+          </div>
+          <div class="connection-item">
+            <span>Hydrus</span>
+            <strong id="hydrus-status-text">未检测</strong>
+          </div>
+          <div class="connection-item">
+            <span>Tag Service</span>
+            <strong id="hydrus-tag-service-text">-</strong>
+          </div>
+        </div>
+        <div class="action-row single">
+          <button id="btn-check-connections" class="button primary">检测连接</button>
+        </div>
+      </section>
+
+      <section class="panel config-panel">
+        <div class="panel-head">
+          <h2>PMTagger 配置、Hydrus 配置</h2>
+          <p>配置模型、标签阈值、翻译文件与 Hydrus 接入参数</p>
+        </div>
+
+        <div class="subsection">
+          <h3>PMTagger</h3>
+          <div class="field-grid">
+            <label>
+              <span>打标模型</span>
+              <select id="default-model"></select>
+            </label>
+            <label>
+              <span>普通标签阈值</span>
+              <input id="general-threshold" type="number" min="0" max="1" step="0.01">
+            </label>
+            <label>
+              <span>角色标签阈值</span>
+              <input id="character-threshold" type="number" min="0" max="1" step="0.01">
+            </label>
+            <label class="span-all">
+              <span>翻译文件</span>
+              <div class="picker-box">
+                <div class="picker-row">
+                  <button id="btn-pick-translation-csv" class="button" type="button">选择 CSV</button>
+                  <input id="translation-csv-file" type="file" accept=".csv,text/csv" hidden>
+                </div>
+                <div id="translation-csv-display" class="picker-display">当前沿用后端已加载词表</div>
+                <div id="translation-csv-meta" class="picker-meta">未重新选择文件</div>
+              </div>
+            </label>
+          </div>
+        </div>
+
+        <div class="subsection">
+          <h3>Hydrus</h3>
+          <div class="field-grid">
+            <label class="span-all">
+              <span>Hydrus API 地址</span>
+              <input id="hydrus-api-base-url" type="text" placeholder="http://127.0.0.1:45869">
+            </label>
+            <label class="span-all">
+              <span>Hydrus Access Key</span>
+              <input id="hydrus-access-key" type="password" placeholder="Hydrus Client API Access Key">
+            </label>
+            <label class="span-all">
+              <span>Hydrus 标签服务名</span>
+              <input id="hydrus-tag-service-name" type="text" placeholder="PMTagger">
+            </label>
+          </div>
+        </div>
+
+        <div class="action-row">
+          <button id="btn-save-config" class="button primary">保存配置</button>
+          <button id="btn-refresh-config" class="button">刷新配置</button>
+          <button id="btn-models" class="button">模型列表</button>
+          <button id="btn-warmup" class="button accent">预热模型</button>
+        </div>
+      </section>
+
+      <section class="panel log-panel">
+        <div class="panel-head">
+          <h2>日志</h2>
+          <p>显示各操作和结果</p>
+        </div>
+        <div class="action-row single">
+          <button id="btn-clear-logs" class="button">清空日志</button>
+        </div>
+        <div id="log-viewer" class="log-viewer"></div>
+      </section>
+
+      <section class="panel process-panel">
+        <div class="panel-head">
+          <h2>处理本地图片</h2>
+          <p>选择图片文件夹，先打标，拿到打标结果后再上传到 Hydrus</p>
+        </div>
+
+        <div class="field-grid process-fields">
+          <label class="span-all">
+            <span>图片文件夹</span>
+            <div class="picker-box">
+              <div class="picker-row">
+                <button id="btn-pick-image-folder" class="button" type="button">选择图片文件夹</button>
+                <input id="image-folder-input" type="file" accept="image/*" webkitdirectory multiple hidden>
+              </div>
+              <div id="image-folder-display" class="picker-display">未选择文件夹</div>
+              <div id="image-folder-meta" class="picker-meta">请选择本地图片文件夹后再开始打标</div>
+            </div>
+          </label>
+        </div>
+
+        <div class="action-row">
+          <button id="btn-process-folder" class="button primary">开始打标</button>
+          <button id="btn-upload-hydrus" class="button accent" disabled>上传到 Hydrus</button>
+          <button id="btn-clear-task" class="button">清空任务</button>
+        </div>
+
+        <div class="summary-strip">
+          <div class="summary-item">
+            <span>总数</span>
+            <strong id="summary-total">0</strong>
+          </div>
+          <div class="summary-item">
+            <span>打标成功</span>
+            <strong id="summary-success">0</strong>
+          </div>
+          <div class="summary-item">
+            <span>打标失败</span>
+            <strong id="summary-failed">0</strong>
+          </div>
+          <div class="summary-item">
+            <span>已上传</span>
+            <strong id="summary-uploaded">0</strong>
+          </div>
+        </div>
+
+        <div class="result-table-wrap">
+          <table class="result-table">
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>文件名</th>
+                <th>标签数</th>
+                <th>翻译数</th>
+                <th>上传状态</th>
+                <th>备注</th>
+              </tr>
+            </thead>
+            <tbody id="result-table-body">
+              <tr class="empty-row">
+                <td colspan="6">还没有打标数据</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
