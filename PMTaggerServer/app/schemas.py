@@ -156,40 +156,6 @@ class RuntimeConfigUpdateRequest(BaseModel):
     hydrus_tag_service_name: str | None = None
 
 
-class LocalBatchProcessRequest(BaseModel):
-    """Web UI 本地图片文件夹批量打标请求体。"""
-
-    image_folder: str
-    model: str | None = None
-    general_threshold: float | None = None
-    character_threshold: float | None = None
-
-
-class LocalBatchProcessItem(BaseModel):
-    """本地文件夹批量处理中的单张图片结果。"""
-
-    index: int = Field(..., ge=0)
-    image_path: str
-    filename: str
-    success: bool
-    english_tags: list[str] = Field(default_factory=list)
-    translated_tags: list[TranslatedTag] = Field(default_factory=list)
-    hydrus_uploaded: bool = False
-    hydrus_hash: str | None = None
-    error: str | None = None
-
-
-class LocalBatchProcessResponse(BaseModel):
-    """Web UI 本地图片文件夹批量打标响应。"""
-
-    message: str
-    image_folder: str
-    total: int
-    succeeded: int
-    failed: int
-    items: list[LocalBatchProcessItem]
-
-
 class ConnectionCheckResponse(BaseModel):
     """服务与 Hydrus 连接检测响应。"""
 
@@ -209,6 +175,8 @@ class HydrusUploadImageRequest(BaseModel):
     image_base64: str | None = None
     filename: str | None = None
     tags: list[str] | None = None
+    extra_tags: list[str] | None = None
+    source_urls: list[str] | None = None
     model: str | None = None
     general_threshold: float | None = None
     character_threshold: float | None = None
@@ -221,6 +189,8 @@ class HydrusUploadImageListItem(BaseModel):
     image_base64: str | None = None
     filename: str | None = None
     tags: list[str] | None = None
+    extra_tags: list[str] | None = None
+    source_urls: list[str] | None = None
 
 
 class HydrusUploadImageResult(BaseModel):

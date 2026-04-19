@@ -324,6 +324,10 @@ select:focus {
   margin-right: 8px;
 }
 
+.log-entry div + div {
+  white-space: pre-wrap;
+}
+
 .log-entry.success {
   border-left-color: #ef4e96;
 }
@@ -331,38 +335,6 @@ select:focus {
 .log-entry.error {
   border-left-color: #8b1c52;
   background: #fff0f6;
-}
-
-.result-table-wrap {
-  margin-top: 14px;
-  border: 2px solid var(--pink-200);
-  background: rgba(255, 255, 255, 0.92);
-  overflow: auto;
-}
-
-.result-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 0.92rem;
-}
-
-.result-table th,
-.result-table td {
-  border-bottom: 1px solid var(--pink-200);
-  padding: 9px 10px;
-  text-align: left;
-  vertical-align: top;
-}
-
-.result-table th {
-  position: sticky;
-  top: 0;
-  background: var(--pink-100);
-  color: var(--pink-700);
-}
-
-.empty-row td {
-  color: var(--muted);
 }
 
 @media (max-width: 1180px) {

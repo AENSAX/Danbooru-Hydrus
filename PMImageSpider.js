@@ -31,7 +31,6 @@
   const TOAST_ID = "pmimage-spider-toast";
 
   let activeImageUrl = "";
-  let activeImageAlt = "";
   let isUploading = false;
 
   function getConfig() {
@@ -222,7 +221,6 @@
     }
 
     activeImageUrl = imageUrl;
-    activeImageAlt = image.getAttribute("alt") || image.getAttribute("title") || "";
     event.preventDefault();
     showContextMenu(event.clientX, event.clientY);
   }
@@ -278,6 +276,7 @@
         image_base64: arrayBufferToBase64(imageBuffer),
         filename: buildUploadFilename(activeImageUrl),
         tags: [],
+        source_urls: buildSourceUrls(activeImageUrl),
       };
 
       const result = await serviceRequestJson("POST", "/api/v1/hydrus/upload/image", {
@@ -290,6 +289,10 @@
       }
 
       const tagCount = Array.isArray(result.english_tags) ? result.english_tags.length : 0;
+      if (isDuplicateHydrusStatus(result.hydrus_status)) {
+        showToast(`检测到重复图片，Hydrus 中已存在；已补写 ${tagCount} 个标签`, "info", 6500);
+        return;
+      }
       showToast(`${getImportSummary(result.hydrus_status)}，写入 ${tagCount} 个标签`, "success", 6000);
     } finally {
       isUploading = false;
@@ -307,6 +310,20 @@
       // 兜底到时间戳文件名。
     }
     return `pmimage-${Date.now()}.jpg`;
+  }
+
+  function buildSourceUrls(imageUrl) {
+    const urls = [];
+    const pageUrl = window.location.href;
+
+    if (imageUrl) {
+      urls.push(imageUrl);
+    }
+    if (pageUrl && pageUrl !== imageUrl) {
+      urls.push(pageUrl);
+    }
+
+    return urls;
   }
 
   function validateConfig(config) {
@@ -425,6 +442,10 @@
       return "文件已存在，标签已补写";
     }
     return "操作完成";
+  }
+
+  function isDuplicateHydrusStatus(status) {
+    return Number(status) === 2;
   }
 
   function getErrorMessage(error) {

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import binascii
-import json
 import logging
 from pathlib import Path
 import time
@@ -28,9 +27,6 @@ from app.schemas import (
     HydrusUploadImageListResponse,
     HydrusUploadImageRequest,
     HydrusUploadImageResult,
-    LocalBatchProcessItem,
-    LocalBatchProcessRequest,
-    LocalBatchProcessResponse,
     ModelInfo,
     RuntimeConfigResponse,
     RuntimeConfigUpdateRequest,
@@ -53,7 +49,6 @@ service = TaggerModelService(settings)
 runtime_state = AppRuntimeState(settings)
 hydrus_service = HydrusService()
 static_dir = Path(__file__).resolve().parent / "static"
-SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"}
 
 
 def _mask_secret(value: str | None) -> str:
@@ -144,6 +139,19 @@ def _append_tag_translation(english_tag: str, chinese_tag: str | None) -> str:
     return f"{normalized_english} {normalized_chinese}"
 
 
+def _normalize_source_urls(source_urls: list[str] | None = None) -> list[str]:
+    """整理来源 URL，去掉空字符串和重复项。"""
+    normalized_urls: list[str] = []
+    seen: set[str] = set()
+    for url in source_urls or []:
+        normalized_url = str(url).strip()
+        if not normalized_url or normalized_url in seen:
+            continue
+        normalized_urls.append(normalized_url)
+        seen.add(normalized_url)
+    return normalized_urls
+
+
 def _build_hydrus_upload_tags(english_tags: list[str], translated_tags) -> list[str]:
     """把英文标签和翻译结果合成最终上传给 Hydrus 的双语标签列表。"""
     translation_by_english: dict[str, str] = {}
@@ -159,41 +167,18 @@ def _build_hydrus_upload_tags(english_tags: list[str], translated_tags) -> list[
     return _normalize_tags(merged_tags)
 
 
-def _load_metadata(
-    metadata: dict[str, object] | None,
-    metadata_json_path: str | None,
-) -> dict[str, object] | None:
-    """从请求体和外部 JSON 文件加载 metadata，并合并成一个对象。"""
-    loaded_metadata: dict[str, object] = {}
-
-    if metadata_json_path:
-        metadata_path = Path(metadata_json_path).expanduser().resolve()
-        if not metadata_path.is_file():
-            raise HTTPException(status_code=400, detail=f"Metadata JSON does not exist: {metadata_path}")
-        try:
-            payload = json.loads(metadata_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise HTTPException(status_code=400, detail=f"Metadata JSON is invalid: {metadata_path}") from exc
-        if not isinstance(payload, dict):
-            raise HTTPException(status_code=400, detail="Metadata JSON root must be an object")
-        loaded_metadata.update(payload)
-
-    if metadata:
-        loaded_metadata.update(metadata)
-
-    return loaded_metadata or None
+def _merge_extra_tags(base_tags: list[str], extra_tags: list[str] | None = None) -> list[str]:
+    """把附加标签合并到最终上传标签里，同时保持去重。"""
+    merged_tags: list[str] = []
+    merged_tags.extend(base_tags)
+    if extra_tags:
+        merged_tags.extend(extra_tags)
+    return _normalize_tags(merged_tags)
 
 
-def _iter_image_files(image_folder: Path) -> list[Path]:
-    """按文件名排序列出指定文件夹中的常见图片文件。"""
-    if not image_folder.is_dir():
-        raise HTTPException(status_code=400, detail=f"Image folder does not exist: {image_folder}")
-
-    return sorted(
-        file
-        for file in image_folder.iterdir()
-        if file.is_file() and file.suffix.lower() in SUPPORTED_IMAGE_EXTENSIONS
-    )
+def _load_metadata(metadata: dict[str, object] | None) -> dict[str, object] | None:
+    """整理请求体里的 metadata。"""
+    return dict(metadata) if metadata else None
 
 
 def _hydrus_config_from_runtime() -> HydrusConfig:
@@ -557,7 +542,7 @@ def process_request(request: TagProcessRequest) -> TagProcessResponse:
                 )
             payload = base64.b64decode(request.image_base64, validate=True)
 
-        metadata = _load_metadata(request.metadata, None)
+        metadata = _load_metadata(request.metadata)
         # 这里不关心输入来源，只把数据整理后交给核心业务函数。
         response = _process_core(
             image_bytes=payload,
@@ -589,95 +574,6 @@ def process_request(request: TagProcessRequest) -> TagProcessResponse:
         logger.exception("Process request crashed filename=%s", request.filename)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
-
-@app.post("/api/v1/ui/process/folder", response_model=LocalBatchProcessResponse)
-def process_folder_request(request: LocalBatchProcessRequest) -> LocalBatchProcessResponse:
-    """批量处理本地图片文件夹，只做打标和翻译，不上传。"""
-    logger.info(
-        "Folder process requested image_folder=%s model=%s general_threshold=%s character_threshold=%s",
-        request.image_folder,
-        request.model,
-        request.general_threshold,
-        request.character_threshold,
-    )
-    try:
-        image_folder = Path(request.image_folder).expanduser().resolve()
-        image_files = _iter_image_files(image_folder)
-        if not image_files:
-            raise HTTPException(status_code=400, detail=f"No supported images found in: {image_folder}")
-        logger.info("Folder process found images image_folder=%s count=%s", image_folder, len(image_files))
-
-        items: list[LocalBatchProcessItem] = []
-        for index, image_path in enumerate(image_files):
-            try:
-                logger.info("Folder process item started index=%s image_path=%s", index, image_path)
-                process_result = _process_core(
-                    image_bytes=image_path.read_bytes(),
-                    filename=image_path.name,
-                    tags=None,
-                    metadata={"image_path": str(image_path)},
-                    model=request.model,
-                    general_threshold=request.general_threshold,
-                    character_threshold=request.character_threshold,
-                )
-                items.append(
-                    LocalBatchProcessItem(
-                        index=index,
-                        image_path=str(image_path),
-                        filename=image_path.name,
-                        success=True,
-                        english_tags=process_result.english_tags,
-                        translated_tags=process_result.translated_tags,
-                    )
-                )
-                logger.info(
-                    "Folder process item succeeded index=%s image_path=%s english_tag_count=%s translated_tag_count=%s",
-                    index,
-                    image_path,
-                    len(process_result.english_tags),
-                    len(process_result.translated_tags),
-                )
-            except Exception as exc:
-                logger.exception("Folder process item failed index=%s image_path=%s", index, image_path)
-                items.append(
-                    LocalBatchProcessItem(
-                        index=index,
-                        image_path=str(image_path),
-                        filename=image_path.name,
-                        success=False,
-                        error=str(exc),
-                    )
-                )
-
-        succeeded = sum(1 for item in items if item.success)
-        failed = len(items) - succeeded
-        response = LocalBatchProcessResponse(
-            message=f"Processed {len(items)} images, succeeded {succeeded}, failed {failed}.",
-            image_folder=str(image_folder),
-            total=len(items),
-            succeeded=succeeded,
-            failed=failed,
-            items=items,
-        )
-        logger.info(
-            "Folder process finished image_folder=%s total=%s succeeded=%s failed=%s",
-            image_folder,
-            len(items),
-            succeeded,
-            failed,
-        )
-        return response
-    except HTTPException:
-        logger.warning("Folder process failed with HTTPException image_folder=%s", request.image_folder, exc_info=True)
-        raise
-    except ValueError as exc:
-        logger.warning("Folder process failed image_folder=%s detail=%s", request.image_folder, exc)
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except Exception as exc:
-        logger.exception("Folder process crashed image_folder=%s", request.image_folder)
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-
-
 def _upload_single_item(
     *,
     index: int,
@@ -702,6 +598,7 @@ def _upload_single_item(
         filename=item.filename,
     )
     provided_tags = _normalize_tags(item.tags)
+    extra_tags = _normalize_tags(item.extra_tags)
     process_result = _process_core(
         image_bytes=image_bytes,
         filename=resolved_filename,
@@ -715,9 +612,12 @@ def _upload_single_item(
         process_result.english_tags,
         process_result.translated_tags,
     )
+    hydrus_upload_tags = _merge_extra_tags(hydrus_upload_tags, extra_tags)
+    source_urls = _normalize_source_urls(item.source_urls)
     import_result = hydrus_service.upload_with_tags(
         image_bytes=image_bytes,
         tags=hydrus_upload_tags,
+        source_urls=source_urls,
         config=hydrus_config,
     )
     result = HydrusUploadImageResult(
@@ -732,7 +632,7 @@ def _upload_single_item(
         translated_tags=process_result.translated_tags,
     )
     logger.info(
-        "Hydrus upload item succeeded index=%s filename=%s image_path=%s hash=%s status=%s used_ai_tags=%s english_tag_count=%s hydrus_upload_tag_count=%s",
+        "Hydrus upload item succeeded index=%s filename=%s image_path=%s hash=%s status=%s used_ai_tags=%s english_tag_count=%s hydrus_upload_tag_count=%s extra_tag_count=%s source_url_count=%s",
         index,
         resolved_filename,
         resolved_path,
@@ -741,6 +641,8 @@ def _upload_single_item(
         result.used_ai_tags,
         len(result.english_tags),
         len(hydrus_upload_tags),
+        len(extra_tags),
+        len(source_urls),
     )
     return result
 
@@ -764,6 +666,8 @@ def hydrus_upload_image(request: HydrusUploadImageRequest) -> HydrusUploadImageR
                 image_base64=request.image_base64,
                 filename=request.filename,
                 tags=request.tags,
+                extra_tags=request.extra_tags,
+                source_urls=request.source_urls,
             ),
             model=request.model,
             general_threshold=request.general_threshold,

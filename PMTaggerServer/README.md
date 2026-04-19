@@ -10,8 +10,6 @@ uv sync
 uv run pmtagger-service
 ```
 
-旧命令 `uv run tagger-service` 仍可用。
-
 默认地址：
 
 - WebUI: `http://127.0.0.1:8000/`
@@ -49,6 +47,8 @@ http://127.0.0.1:8010/
 - 将已打标图片上传到 Hydrus。
 - 查看每一步操作日志。
 
+网页脚本导入的非本地图片会自动把来源 URL 写入 Hydrus：Danbooru 导入会关联帖子页 URL 和原图 URL，通用网页导入会关联图片 URL 和当前页面 URL。Hydrus Access Key 需要包含 Import URLs 权限。
+
 配置会保存到：
 
 ```text
@@ -71,7 +71,12 @@ http://127.0.0.1:8010/
 - `POST /api/v1/hydrus/upload/image`：上传单张图片到 Hydrus，`tags` 为空时自动 AI 打标。
 - `POST /api/v1/hydrus/upload/images`：上传图片列表到 Hydrus。
 
+`/api/v1/hydrus/upload/image` 与 `/api/v1/hydrus/upload/images` 的图片对象可传入 `source_urls` 字段，格式为字符串数组；传入后 PMTagger 会在 Hydrus 导入成功后自动关联这些 URL。本地文件路径导入如果不传该字段，则不会写入 URL。
+
+如果希望在保留 AI 打标的同时额外附加自定义标签，可以传 `extra_tags` 字段。`tags` 非空会跳过 AI 打标，而 `extra_tags` 会在 AI 打标完成后再合并进最终上传到 Hydrus 的标签列表。
+
 ## 油猴脚本对接
 
-- `PMDanBooruSpider.js` 会发送 Danbooru 原图和 Danbooru 标签到 `POST /api/v1/hydrus/upload/image`。
-- `PMImageSpider.js` 会发送右键选中的网页图片到 `POST /api/v1/hydrus/upload/image`，标签为空，因此由 PMTagger 自动 AI 打标。
+- `PMDanBooruSpider.js` 会发送 Danbooru 原图、Danbooru 标签、帖子页 URL 和原图 URL 到 `POST /api/v1/hydrus/upload/image`。
+- `PMImageSpider.js` 会发送右键选中的网页图片、图片 URL 和当前页面 URL 到 `POST /api/v1/hydrus/upload/image`，标签为空，因此由 PMTagger 自动 AI 打标。
+- `PMEHentaiSpider.js` 会遍历 e-hentai / exhentai 某个 gallery 的所有分页与图片页，抓取实际图片后发送到 `POST /api/v1/hydrus/upload/image`，并附带 gallery 链接、图片页链接和实际图片链接。

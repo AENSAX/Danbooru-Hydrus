@@ -20,7 +20,6 @@ const els = {
   summarySuccess: document.getElementById("summary-success"),
   summaryFailed: document.getElementById("summary-failed"),
   summaryUploaded: document.getElementById("summary-uploaded"),
-  resultTableBody: document.getElementById("result-table-body"),
   logViewer: document.getElementById("log-viewer"),
   btnPickTranslationCsv: document.getElementById("btn-pick-translation-csv"),
   btnPickImageFolder: document.getElementById("btn-pick-image-folder"),
@@ -36,6 +35,7 @@ const els = {
 };
 
 const SUPPORTED_IMAGE_EXTENSIONS = new Set(["jpg", "jpeg", "png", "webp", "bmp", "gif"]);
+const HYDRUS_UPLOAD_BATCH_SIZE = 20;
 
 let currentTranslationCsvPath = "";
 let selectedTranslationFile = null;
@@ -152,16 +152,19 @@ function reportActionError(actionName, error, detail = {}) {
 }
 
 async function fetchJson(url, options = {}, actionName = "请求") {
-  log(`${actionName}开始`, "info", `${options.method || "GET"} ${url}`);
-  const method = options.method || "GET";
-  const isFormData = options.body instanceof FormData;
+  const { silentLogs = false, ...fetchOptions } = options;
+  if (!silentLogs) {
+    log(`${actionName}开始`, "info", `${fetchOptions.method || "GET"} ${url}`);
+  }
+  const method = fetchOptions.method || "GET";
+  const isFormData = fetchOptions.body instanceof FormData;
   const requestHeaders = {
-    ...(options.headers || {}),
+    ...(fetchOptions.headers || {}),
   };
   if (!isFormData && !requestHeaders["Content-Type"]) {
     requestHeaders["Content-Type"] = "application/json";
   }
-  const requestBody = parseRequestBodyForConsole(options.body);
+  const requestBody = parseRequestBodyForConsole(fetchOptions.body);
 
   console.groupCollapsed(`[${actionName}] ${method} ${url}`);
   console.info("Request", sanitizeForConsole({
@@ -173,7 +176,7 @@ async function fetchJson(url, options = {}, actionName = "请求") {
 
   try {
     const response = await fetch(url, {
-      ...options,
+      ...fetchOptions,
       headers: requestHeaders,
     });
 
@@ -214,11 +217,15 @@ async function fetchJson(url, options = {}, actionName = "请求") {
         payload: error.payload,
         requestBody: error.requestBody,
       }));
-      log(`${actionName}失败`, "error", detail || error.message);
+      if (!silentLogs) {
+        log(`${actionName}失败`, "error", detail || error.message);
+      }
       throw error;
     }
 
-    log(`${actionName}成功`, "success");
+    if (!silentLogs) {
+      log(`${actionName}成功`, "success");
+    }
     return payload;
   } catch (error) {
     if (!error?.httpStatus) {
@@ -262,7 +269,14 @@ function formatFileSize(size) {
   if (size < 1024 * 1024) {
     return `${(size / 1024).toFixed(1)} KB`;
   }
-  return `${(size / (1024 * 1024)).toFixed(2)} MB`;
+  if (size < 1024 * 1024 * 1024) {
+    return `${(size / (1024 * 1024)).toFixed(2)} MB`;
+  }
+  return `${(size / (1024 * 1024 * 1024)).toFixed(2)} GB`;
+}
+
+function getImageEntryTotalBytes(imageEntries) {
+  return imageEntries.reduce((sum, item) => sum + item.file.size, 0);
 }
 
 function renderTranslationCsvState() {
@@ -297,7 +311,7 @@ function renderImageFolderState() {
   const topFolderName = selectedImageFiles[0].relativePath.includes("/")
     ? selectedImageFiles[0].relativePath.split("/")[0]
     : "已选图片集";
-  const totalBytes = selectedImageFiles.reduce((sum, item) => sum + item.file.size, 0);
+  const totalBytes = getImageEntryTotalBytes(selectedImageFiles);
   els.imageFolderDisplay.textContent = topFolderName;
   els.imageFolderMeta.textContent = `已选择 ${selectedImageFiles.length} 张图片，总大小 ${formatFileSize(totalBytes)}`;
   els.imageFolderDisplay.title = selectedImageFiles.map((item) => item.displayName).join("\n");
@@ -328,31 +342,22 @@ function updateSummary(total, succeeded, failed, uploaded = 0) {
   els.summaryUploaded.textContent = uploaded;
 }
 
-function renderTaggedItems(items) {
-  els.resultTableBody.innerHTML = "";
+function formatFailureDetails(items) {
+  return items
+    .map((item) => {
+      const name = item.display_name || item.filename || "未知文件";
+      const reason = item.error || "未知错误";
+      return `- ${name}：${reason}`;
+    })
+    .join("\n");
+}
 
-  if (!items.length) {
-    els.resultTableBody.innerHTML = `
-      <tr class="empty-row">
-        <td colspan="6">还没有打标数据</td>
-      </tr>
-    `;
-    return;
+function chunkItems(items, chunkSize) {
+  const chunks = [];
+  for (let index = 0; index < items.length; index += chunkSize) {
+    chunks.push(items.slice(index, index + chunkSize));
   }
-
-  for (const item of items) {
-    const row = document.createElement("tr");
-    const note = item.error || item.hydrus_hash || "-";
-    row.innerHTML = `
-      <td>${item.index + 1}</td>
-      <td>${item.display_name || item.filename || "-"}</td>
-      <td>${item.english_tags?.length || 0}</td>
-      <td>${item.translated_tags?.length || 0}</td>
-      <td>${item.hydrus_uploaded ? "已上传" : (item.success ? "待上传" : "失败")}</td>
-      <td>${note}</td>
-    `;
-    els.resultTableBody.appendChild(row);
-  }
+  return chunks;
 }
 
 function setUploadButtonEnabled(enabled) {
@@ -395,6 +400,14 @@ function currentUploadedCount() {
   return lastTaggedItems.filter((item) => item.hydrus_uploaded).length;
 }
 
+function isDuplicateHydrusStatus(status) {
+  return Number(status) === 2;
+}
+
+function countDuplicateUploads(items) {
+  return items.filter((item) => isDuplicateHydrusStatus(item.hydrus_status)).length;
+}
+
 function makeTaggedItemFromResult(index, fileEntry, result) {
   return {
     index,
@@ -406,6 +419,7 @@ function makeTaggedItemFromResult(index, fileEntry, result) {
     translated_tags: result.translated_tags || [],
     hydrus_uploaded: false,
     hydrus_hash: null,
+    hydrus_status: null,
     error: null,
   };
 }
@@ -421,6 +435,7 @@ function makeTaggedItemFromError(index, fileEntry, error) {
     translated_tags: [],
     hydrus_uploaded: false,
     hydrus_hash: null,
+    hydrus_status: null,
     error: error?.message || String(error),
   };
 }
@@ -555,12 +570,13 @@ async function processFolder() {
   }
 
   lastTaggedItems = [];
-  renderTaggedItems([]);
   updateSummary(selectedImageFiles.length, 0, 0, 0);
   setUploadButtonEnabled(false);
+  log("开始本地图片打标", "info", `共 ${selectedImageFiles.length} 张图片`);
 
   let succeeded = 0;
   let failed = 0;
+  const failedItems = [];
 
   for (let index = 0; index < selectedImageFiles.length; index += 1) {
     const fileEntry = selectedImageFiles[index];
@@ -582,18 +598,23 @@ async function processFolder() {
         {
           method: "POST",
           body: formData,
+          silentLogs: true,
         },
         `开始打标 ${fileEntry.displayName}`,
       );
       lastTaggedItems.push(makeTaggedItemFromResult(index, fileEntry, result));
       succeeded += 1;
     } catch (error) {
-      lastTaggedItems.push(makeTaggedItemFromError(index, fileEntry, error));
+      const failedItem = makeTaggedItemFromError(index, fileEntry, error);
+      lastTaggedItems.push(failedItem);
+      failedItems.push(failedItem);
       failed += 1;
-      reportActionError(`开始打标 ${fileEntry.displayName}`, error, describeFile(fileEntry.file));
+      console.error(`[开始打标 ${fileEntry.displayName}] 执行失败`, {
+        file: describeFile(fileEntry.file),
+        error,
+      });
     }
 
-    renderTaggedItems(lastTaggedItems);
     updateSummary(selectedImageFiles.length, succeeded, failed, 0);
   }
 
@@ -601,7 +622,9 @@ async function processFolder() {
   log(
     `本地图片打标完成，共 ${selectedImageFiles.length} 张`,
     failed > 0 ? "error" : "success",
-    `成功 ${succeeded}，失败 ${failed}`,
+    failedItems.length
+      ? `成功 ${succeeded}，失败 ${failed}\n${formatFailureDetails(failedItems)}`
+      : `成功 ${succeeded}，失败 ${failed}`,
   );
 }
 
@@ -613,83 +636,183 @@ async function uploadToHydrus() {
     return;
   }
 
-  const payloadItems = [];
-  for (const item of uploadQueue) {
-    const fileEntry = getSelectedImageEntryById(item.file_id);
-    if (!fileEntry) {
-      reportActionError("上传到 Hydrus", new Error("对应的本地文件已丢失"), item);
+  const uploadBatches = chunkItems(uploadQueue, HYDRUS_UPLOAD_BATCH_SIZE);
+  const allFailedUploadItems = [];
+
+  log(
+    "开始上传到 Hydrus",
+    "info",
+    `共 ${uploadQueue.length} 张图片，分 ${uploadBatches.length} 批上传，每批最多 ${HYDRUS_UPLOAD_BATCH_SIZE} 张`,
+  );
+
+  for (let batchIndex = 0; batchIndex < uploadBatches.length; batchIndex += 1) {
+    const batchItems = uploadBatches[batchIndex];
+    const payloadItems = [];
+    const localUploadFailures = [];
+
+    log(
+      `上传批次 ${batchIndex + 1}/${uploadBatches.length}`,
+      "info",
+      `准备处理 ${batchItems.length} 张图片`,
+    );
+
+    for (const item of batchItems) {
+      const fileEntry = getSelectedImageEntryById(item.file_id);
+      if (!fileEntry) {
+        const failedItem = {
+          ...item,
+          success: false,
+          error: "对应的本地文件已丢失",
+        };
+        localUploadFailures.push(failedItem);
+        console.error("[上传到 Hydrus] 本地文件已丢失", sanitizeForConsole(item));
+        continue;
+      }
+
+      payloadItems.push({
+        file_id: item.file_id,
+        display_name: item.display_name,
+        image_base64: await fileToBase64(fileEntry.file),
+        filename: fileEntry.displayName,
+        tags: item.english_tags,
+      });
+    }
+
+    if (!payloadItems.length) {
+      allFailedUploadItems.push(...localUploadFailures);
+      log(
+        `上传批次 ${batchIndex + 1}/${uploadBatches.length} 完成`,
+        "error",
+        localUploadFailures.length
+          ? `成功 0，失败 ${localUploadFailures.length}\n${formatFailureDetails(localUploadFailures)}`
+          : "这一批没有可上传的图片二进制数据",
+      );
       continue;
     }
 
-    payloadItems.push({
-      image_base64: await fileToBase64(fileEntry.file),
-      filename: fileEntry.displayName,
-      tags: item.english_tags,
-    });
-  }
-
-  if (!payloadItems.length) {
-    log("上传已取消", "error", "没有可用于上传的图片二进制数据");
-    return;
-  }
-
-  const payload = {
-    items: payloadItems,
-    model: els.defaultModel.value || null,
-    general_threshold: els.generalThreshold.value ? Number(els.generalThreshold.value) : null,
-    character_threshold: els.characterThreshold.value ? Number(els.characterThreshold.value) : null,
-  };
-
-  let result;
-  try {
-    result = await fetchJson(
-      "/api/v1/hydrus/upload/images",
-      {
-        method: "POST",
-        body: JSON.stringify(payload),
-      },
-      "上传到 Hydrus",
-    );
-  } catch (error) {
-    reportActionError("上传到 Hydrus", error, {
-      item_count: payload.items.length,
-      filenames: uploadQueue.map((item) => item.display_name),
-    });
-    throw error;
-  }
-
-  const uploadQueueByIndex = new Map(uploadQueue.map((item, index) => [index, item.file_id]));
-  const uploadResultByFileId = new Map(
-    result.items.map((item) => [uploadQueueByIndex.get(item.index), item])
-  );
-
-  lastTaggedItems = lastTaggedItems.map((item) => {
-    const uploaded = uploadResultByFileId.get(item.file_id);
-    if (!uploaded) {
-      return item;
-    }
-    return {
-      ...item,
-      hydrus_uploaded: uploaded.success,
-      hydrus_hash: uploaded.hydrus_hash,
-      error: uploaded.error || item.error,
+    const payload = {
+      items: payloadItems.map((item) => ({
+        image_base64: item.image_base64,
+        filename: item.filename,
+        tags: item.tags,
+      })),
+      model: els.defaultModel.value || null,
+      general_threshold: els.generalThreshold.value ? Number(els.generalThreshold.value) : null,
+      character_threshold: els.characterThreshold.value ? Number(els.characterThreshold.value) : null,
     };
-  });
 
-  renderTaggedItems(lastTaggedItems);
+    let result;
+    try {
+      result = await fetchJson(
+        "/api/v1/hydrus/upload/images",
+        {
+          method: "POST",
+          body: JSON.stringify(payload),
+          silentLogs: true,
+        },
+        "上传到 Hydrus",
+      );
+    } catch (error) {
+      const requestFailures = payloadItems.map((item) => ({
+        display_name: item.display_name || item.filename,
+        filename: item.filename,
+        error: error?.message || String(error),
+      }));
+      allFailedUploadItems.push(...localUploadFailures, ...requestFailures);
+      console.error(`[上传批次 ${batchIndex + 1}/${uploadBatches.length}] 请求失败`, {
+        item_count: payload.items.length,
+        filenames: payloadItems.map((item) => item.display_name),
+        error,
+      });
+      log(
+        `上传批次 ${batchIndex + 1}/${uploadBatches.length} 完成`,
+        "error",
+        `成功 0，失败 ${localUploadFailures.length + requestFailures.length}\n${formatFailureDetails([
+          ...localUploadFailures,
+          ...requestFailures,
+        ])}`,
+      );
+      continue;
+    }
+
+    const uploadQueueByIndex = new Map(payloadItems.map((item, index) => [index, item.file_id]));
+    const uploadQueueByFileId = new Map(payloadItems.map((item) => [item.file_id, item]));
+    const uploadResultByFileId = new Map(
+      result.items.map((item) => [uploadQueueByIndex.get(item.index), item])
+    );
+
+    lastTaggedItems = lastTaggedItems.map((item) => {
+      const uploaded = uploadResultByFileId.get(item.file_id);
+      if (!uploaded) {
+        return item;
+      }
+      return {
+        ...item,
+        hydrus_uploaded: uploaded.success,
+        hydrus_hash: uploaded.hydrus_hash,
+        hydrus_status: uploaded.hydrus_status,
+        error: uploaded.error || item.error,
+      };
+    });
+
+    const hydrusFailures = result.items
+      .filter((item) => !item.success)
+      .map((item) => {
+        const fileId = uploadQueueByIndex.get(item.index);
+        const queuedItem = uploadQueueByFileId.get(fileId) || {};
+        return {
+          display_name: queuedItem.display_name || item.filename,
+          filename: item.filename,
+          error: item.error,
+        };
+      });
+
+    const batchDuplicateCount = countDuplicateUploads(result.items);
+    const batchImportedCount = (result.succeeded || 0) - batchDuplicateCount;
+
+    allFailedUploadItems.push(...localUploadFailures, ...hydrusFailures);
+    updateSummary(
+      lastTaggedItems.length,
+      lastTaggedItems.filter((item) => item.success).length,
+      lastTaggedItems.filter((item) => !item.success).length,
+      currentUploadedCount(),
+    );
+
+    const batchFailedCount = localUploadFailures.length + hydrusFailures.length;
+    log(
+      `上传批次 ${batchIndex + 1}/${uploadBatches.length} 完成`,
+      batchFailedCount > 0 ? "error" : "success",
+      batchFailedCount > 0
+        ? `新导入 ${batchImportedCount}，重复 ${batchDuplicateCount}，失败 ${batchFailedCount}\n${formatFailureDetails([
+          ...localUploadFailures,
+          ...hydrusFailures,
+        ])}`
+        : `新导入 ${batchImportedCount}，重复 ${batchDuplicateCount}，失败 0`,
+    );
+  }
+
   updateSummary(
     lastTaggedItems.length,
     lastTaggedItems.filter((item) => item.success).length,
     lastTaggedItems.filter((item) => !item.success).length,
     currentUploadedCount(),
   );
-  log(result.message, result.failed > 0 ? "error" : "success");
+
+  const failedCount = allFailedUploadItems.length;
+  const duplicateCount = countDuplicateUploads(lastTaggedItems);
+  const importedCount = currentUploadedCount() - duplicateCount;
+  log(
+    "上传到 Hydrus 完成",
+    failedCount > 0 ? "error" : "success",
+    failedCount > 0
+      ? `新导入 ${importedCount}，重复 ${duplicateCount}，失败 ${failedCount}\n${formatFailureDetails(allFailedUploadItems)}`
+      : `新导入 ${importedCount}，重复 ${duplicateCount}，失败 0`,
+  );
 }
 
 function clearTask() {
   clearSelectedImageFiles();
   lastTaggedItems = [];
-  renderTaggedItems([]);
   updateSummary(0, 0, 0, 0);
   setUploadButtonEnabled(false);
   log("已清空本地图片处理任务", "info");
@@ -720,16 +843,21 @@ function handleImageFolderSelection(event) {
     return;
   }
 
-  selectedImageFiles = imageFiles
+  const nextSelectedImageFiles = imageFiles
     .map((file, index) => createSelectedImageEntry(file, index))
     .sort((left, right) => left.displayName.localeCompare(right.displayName, "zh-CN"));
 
+  selectedImageFiles = nextSelectedImageFiles;
+
   renderImageFolderState();
-  log("已选择图片文件夹", "info", `共 ${selectedImageFiles.length} 张图片`);
+  log(
+    "已选择图片文件夹",
+    "info",
+    `共 ${selectedImageFiles.length} 张图片，总大小 ${formatFileSize(getImageEntryTotalBytes(selectedImageFiles))}`,
+  );
 }
 
 async function initialize() {
-  renderTaggedItems([]);
   renderTranslationCsvState();
   renderImageFolderState();
   updateSummary(0, 0, 0, 0);

@@ -17,7 +17,6 @@ dependencies = [
 ]
 
 [project.scripts]
-tagger-service = "app.main:run"
 pmtagger-service = "app.main:run"
 
 [build-system]

@@ -32,6 +32,7 @@
   const BUTTON_ID = "pmtagger-danbooru-uploader-button";
   const BATCH_BUTTON_ID = "pmtagger-danbooru-batch-button";
   const TOAST_ID = "pmtagger-danbooru-uploader-toast";
+  const BATCH_ITEM_TIMEOUT_MS = 60000;
 
   let isUploading = false;
   let uiObserver = null;
@@ -293,6 +294,10 @@
       setButtonLoading(true);
       const post = await fetchDanbooruPost(postId);
       const result = await importDanbooruPost(post, config);
+      if (result.isDuplicate) {
+        showToast(`检测到重复图片，Hydrus 中已存在；已补写 ${result.tagCount} 个标签`, "info", 6000);
+        return;
+      }
       showToast(`${result.summary}，服务收到 ${result.tagCount} 个标签`, "success", 5000);
     } catch (error) {
       showToast(getErrorMessage(error), "error", 6000);
@@ -331,7 +336,8 @@
         return;
       }
 
-      let successCount = 0;
+      let importedCount = 0;
+      let duplicateCount = 0;
       let failureCount = 0;
 
       for (let index = 0; index < posts.length; index += 1) {
@@ -340,20 +346,29 @@
         showToast(`正在批量导入 ${progress}（post #${post.id}）...`, "info", 2500);
 
         try {
-          await importDanbooruPost(post, config);
-          successCount += 1;
+          const result = await withTimeout(
+            importDanbooruPost(post, config),
+            BATCH_ITEM_TIMEOUT_MS,
+            `post #${post.id} 超时，已跳过`
+          );
+          if (result.isDuplicate) {
+            duplicateCount += 1;
+          } else {
+            importedCount += 1;
+          }
         } catch (error) {
           failureCount += 1;
           console.error(`批量导入失败 post #${post.id}:`, error);
         }
       }
 
+      const successCount = importedCount + duplicateCount;
       if (!successCount) {
         throw new Error(`批量导入失败，本页 ${failureCount} 张图片均未成功`);
       }
 
       showToast(
-        `批量导入完成：成功 ${successCount} 张，失败 ${failureCount} 张`,
+        `批量导入完成：新导入 ${importedCount} 张，重复 ${duplicateCount} 张，失败 ${failureCount} 张`,
         failureCount ? "info" : "success",
         6000
       );
@@ -419,6 +434,7 @@
       image_base64: arrayBufferToBase64(fileBuffer),
       filename: buildUploadFilename(post, fileUrl),
       tags,
+      source_urls: buildSourceUrls(post, fileUrl),
     };
 
     const result = await serviceRequestJson("POST", "/api/v1/hydrus/upload/image", {
@@ -434,6 +450,7 @@
       hash: result.hydrus_hash || null,
       tagCount: Array.isArray(result.english_tags) ? result.english_tags.length : tags.length,
       summary: getImportSummary(result.hydrus_status),
+      isDuplicate: isDuplicateHydrusStatus(result.hydrus_status),
     };
   }
 
@@ -448,6 +465,20 @@
 
     const extension = post?.file_ext ? `.${post.file_ext}` : "";
     return `${post?.id || "danbooru-post"}${extension}`;
+  }
+
+  function buildSourceUrls(post, fileUrl) {
+    const urls = [];
+    const postUrl = post?.id ? `${window.location.origin}/posts/${post.id}` : window.location.href;
+
+    if (postUrl) {
+      urls.push(postUrl);
+    }
+    if (fileUrl && fileUrl !== postUrl) {
+      urls.push(fileUrl);
+    }
+
+    return urls;
   }
 
   function splitTagString(value) {
@@ -608,6 +639,21 @@
     return btoa(binary);
   }
 
+  function withTimeout(taskPromise, timeoutMs, timeoutMessage) {
+    let timerId = null;
+    const timeoutPromise = new Promise((_, reject) => {
+      timerId = window.setTimeout(() => {
+        reject(new Error(timeoutMessage));
+      }, timeoutMs);
+    });
+
+    return Promise.race([taskPromise, timeoutPromise]).finally(() => {
+      if (timerId !== null) {
+        window.clearTimeout(timerId);
+      }
+    });
+  }
+
   function getImportSummary(status) {
     if (Number(status) === 1) {
       return "文件已导入";
@@ -616,6 +662,10 @@
       return "文件已存在，标签已补写";
     }
     return "操作完成";
+  }
+
+  function isDuplicateHydrusStatus(status) {
+    return Number(status) === 2;
   }
 
   function getErrorMessage(error) {

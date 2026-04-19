@@ -150,14 +150,38 @@ class HydrusService:
         logger.info("Hydrus clean_tags returned empty payload, fallback to original tags input_count=%s", len(tags))
         return tags
 
+    def associate_urls(self, hash_value: str, source_urls: list[str], config: HydrusConfig) -> None:
+        """把来源 URL 关联到已导入的 Hydrus 文件。"""
+        normalized_urls = [str(url).strip() for url in source_urls if str(url).strip()]
+        if not normalized_urls:
+            logger.info("Hydrus associate_urls skipped because url list is empty hash=%s", hash_value)
+            return
+
+        logger.info("Hydrus associate_urls started hash=%s url_count=%s", hash_value, len(normalized_urls))
+        self._request_json(
+            "POST",
+            "/add_urls/associate_url",
+            config,
+            body={
+                "hash": hash_value,
+                "urls_to_add": normalized_urls,
+            },
+        )
+        logger.info("Hydrus associate_urls finished hash=%s url_count=%s", hash_value, len(normalized_urls))
+
     def upload_with_tags(
         self,
         image_bytes: bytes,
         tags: list[str],
+        source_urls: list[str] | None,
         config: HydrusConfig,
     ) -> dict[str, Any]:
         """上传文件并在成功后写入标签。"""
-        logger.info("Hydrus upload_with_tags started tag_count=%s", len(tags))
+        logger.info(
+            "Hydrus upload_with_tags started tag_count=%s source_url_count=%s",
+            len(tags),
+            len(source_urls or []),
+        )
         cleaned_tags = self.clean_tags(tags, config)
         import_result = self.upload_file(image_bytes, config)
         status = int(import_result.get("status", 0))
@@ -170,11 +194,13 @@ class HydrusService:
             raise ValueError("Hydrus import succeeded but did not return file hash")
 
         self.add_tags(hash_value, cleaned_tags, config)
+        self.associate_urls(hash_value, source_urls or [], config)
         logger.info(
-            "Hydrus upload_with_tags finished status=%s hash=%s tag_count=%s",
+            "Hydrus upload_with_tags finished status=%s hash=%s tag_count=%s source_url_count=%s",
             status,
             hash_value,
             len(cleaned_tags),
+            len(source_urls or []),
         )
         return import_result
 
