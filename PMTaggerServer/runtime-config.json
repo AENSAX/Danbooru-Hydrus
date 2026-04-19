@@ -1,0 +1,9 @@
+{
+  "default_model": "vit-large",
+  "general_threshold": 0.35,
+  "character_threshold": 0.35,
+  "translation_csv_path": "E:\\MyProjects\\HydrusUpLoader\\translations.csv",
+  "hydrus_api_base_url": "http://127.0.0.1:45869",
+  "hydrus_access_key": "0856640127d12dc5e65b966d658744df60ed77e7b3a6cb3914e4488d0d46425b",
+  "hydrus_tag_service_name": "my tags"
+}

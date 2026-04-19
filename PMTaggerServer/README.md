@@ -1,11 +1,11 @@
-# PMTagger Service
+# PMTagger Server
 
-`PMTagger` 是 PINKMERCY 的本地 HTTP 服务，负责图片 AI 打标、英文标签翻译、Hydrus 上传和 WebUI 配置。
+`PMTagger`本地 HTTP 服务，负责图片 AI 打标、英文标签翻译、Hydrus 上传和 WebUI 配置。
 
 ## 启动
 
 ```powershell
-cd E:\MyProjects\HydrusUpLoader\PMTagger
+cd \PMTaggerServer
 uv sync
 uv run pmtagger-service
 ```
@@ -22,7 +22,7 @@ uv run pmtagger-service
 启动前设置 `TAGGER_PORT`：
 
 ```powershell
-cd E:\MyProjects\HydrusUpLoader\PMTagger
+cd \PMTaggerServer
 $env:TAGGER_PORT = "8010"
 uv run pmtagger-service
 ```
@@ -52,7 +52,7 @@ http://127.0.0.1:8010/
 配置会保存到：
 
 ```text
-E:\MyProjects\HydrusUpLoader\PMTagger\runtime-config.json
+\PMTaggerServer\runtime-config.json
 ```
 
 ## 主要 API

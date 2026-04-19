@@ -1,141 +1,93 @@
-# Danbooru -> Hydrus
+# PMTagger
 
-一个面向 `Danbooru` 帖子页和列表页的油猴脚本，用来把图片直接发送到本地 `Hydrus`，并同时写入页面标签。
+一个面向 Hydrus 的图片入库工具链，用来把网页图片或本地图片发送到本地服务，完成 AI 打标、标签翻译，并最终上传到 Hydrus。
 
-## 功能
+## 项目组成
 
-- 在 `https://danbooru.donmai.us/posts/<id>` 页面显示单图导入按钮
-- 在 `https://danbooru.donmai.us/posts?page=2&tags=...` 这类列表页显示批量导入按钮
-- 读取当前帖子 JSON 数据
-- 下载当前帖子原图
-- 上传文件到本地 `Hydrus Client API`
-- 自动写入 Danbooru 标签
-- 支持按 CSV 对照表翻译标签，并保留原标签
-- 若文件曾被物理删除，自动清除删除记录后重试上传一次
-- 可选在检测到重复文件时删除旧文件，再重新上传覆盖
-- 自动关联帖子 URL 和原图 URL
+- `PMTagger`：PMTagger 本地 HTTP 服务和 WebUI，负责模型打标、翻译、Hydrus 上传。
+- `PMDanBooruSpider.js`：Danbooru 专用油猴脚本，能读取 Danbooru 帖子标签并发送到 PMTagger。
+- `PMImageSpider.js`：通用网页油猴脚本，适用于所有网页，右键图片即可发送到 PMTagger。
+- `translations.csv`：默认标签翻译词表，形如：1girl,0,1个女性。
+## PMTagger 服务
 
-## 标签策略
+进入服务目录：
 
-- 普通标签：`tag_string_general`
-- 作者标签：`artist:*`
-- 角色标签：`character:*`
-- 作品标签：`series:*`
-- 物种标签：`species:*`
-- 设定标签：`lore:*`
-- 元标签：`tag_string_meta`
-- 分级标签：`rating:safe|questionable|explicit`
-- 帖子标识：`danbooru:<post_id>`
+```powershell
+cd \PMTaggerServer
+uv sync
+```
 
-如果配置了标签翻译 CSV 链接，脚本会在上传前把标签改写为“原标签 + 空格 + 翻译”形式，例如：
+启动服务：
 
-- 原标签：`1girl`
-- CSV 行：`1girl,0,1个女性`
-- 最终标签：`1girl 1个女性`
+```powershell
+uv run pmtagger-service
+```
 
-## 安装方法
+兼容旧命令：
 
-1. 安装浏览器扩展 `Tampermonkey`
-2. 新建脚本
-3. 将 `UpLoader.js:1` 全部内容粘贴进去并保存
-4. 打开任意 Danbooru 帖子页
+```powershell
+uv run tagger-service
+```
 
-## Hydrus 端准备
+默认地址：
 
-在 `Hydrus` 客户端中：
+- WebUI: `http://127.0.0.1:8000/`
+- API 文档: `http://127.0.0.1:8000/docs`
+- 健康检查: `http://127.0.0.1:8000/health`
 
-1. 打开 `services -> manage services`
-2. 启用 `Client API`
-3. 记下 API 地址，默认通常是 `http://127.0.0.1:45869`
-4. 创建一个带这些权限的 `Access Key`
-   - `Import Files`
-   - `Add Tags`
-   - `Import URLs`
-   - `Search Files`
+## 修改启动端口
 
-## 脚本配置
+启动前设置环境变量即可：
 
-安装脚本后，在 Tampermonkey 菜单中配置：
+```powershell
+cd \PMTagger
+$env:TAGGER_PORT = "8010"
+uv run pmtagger-service
+```
 
-- `设置 Hydrus API 地址`
-- `设置 Access Key`
-- `设置标签服务名`
-- `设置标签翻译地址`
-- `切换重复文件覆盖重传`
-- `测试 Hydrus 连接`
+如果还想修改监听地址，例如允许局域网访问：
 
-默认标签服务名为 `my tags`。
+```powershell
+$env:TAGGER_HOST = "0.0.0.0"
+$env:TAGGER_PORT = "8010"
+uv run pmtagger-service
+```
 
-`切换重复文件覆盖重传` 默认关闭。
+修改后访问地址会变成：
 
-- 关闭时：若 Hydrus 返回重复文件，脚本沿用原有行为，只补写标签
-- 开启时：若 Hydrus 返回重复文件，脚本会先删除本地库中的旧文件，再重新上传当前文件
-- 这个选项会执行物理删除并重传，适合你明确想“用当前上传重新覆盖旧记录”的情况
+```text
+http://127.0.0.1:8010/
+```
 
-### 标签翻译 CSV 格式
+## 基本流程
 
-CSV 每行使用以下格式：
+1. 启动 Hydrus，并确保 Client API 可用。
+2. 启动 PMTagger 服务。
+3. 打开 `http://127.0.0.1:8000/`。
+4. 在 WebUI 中配置 Hydrus API 地址、Access Key、标签服务名。
+5. 保存配置，配置会写入 `PMTagger/runtime-config.json`，重启后仍会保留。
+6. 安装 `PMDanBooruSpider.js` 或 `PMImageSpider.js` 油猴脚本。
+7. 在网页上把图片发送给 PMTagger。
 
-- `原标签,0,翻译标签`
+## 上传标签策略
 
-例如：
+PMTagger 上传到 Hydrus 前会把标签翻译追加到英文标签后面，例如：
 
-- `1girl,0,1个女性`
-- `blue_hair,0,蓝发`
+```text
+1girl 1个女性
+solo 单独人物
+```
 
-说明：
+如果某个标签没有翻译命中，则保留英文原标签。PMDanBooruSpider 会把 Danbooru 已有标签交给 PMTagger；PMImageSpider 对普通网页图片不提供标签，PMTagger 会自动 AI 打标后翻译。
 
-- 第二列固定为 `0`
-- 脚本会保留原标签，并把翻译追加在后面
-- 这里填写的是一个可访问的 HTTP 链接，例如 `http://127.0.0.1:8765/translations.csv`
-- 不配置该项时，脚本保持原有行为，不做翻译
+## 使用教程
 
-## 本地翻译服务器
+详细教程见：
 
-仓库里提供了一个本地服务器脚本：`tag-translation-server.py`。
+- [使用教程](docs/使用教程.md)
 
-它会把你指定的 CSV 文件通过 HTTP 暴露出来，这样油猴脚本就可以读取了。
+其中包括：
 
-### 启动方法
-
-1. 准备一个 CSV 文件，例如 `translations.csv`
-2. 在仓库目录打开终端
-3. 运行：
-
-   `python tag-translation-server.py --csv translations.csv`
-
-4. 启动后会看到类似输出：
-
-   `http://127.0.0.1:8765/translations.csv`
-
-5. 把这个链接填入油猴菜单里的 `设置标签翻译地址`
-
-### 可选参数
-
-- `--host`：监听地址，默认 `127.0.0.1`
-- `--port`：端口，默认 `8765`
-- `--csv`：要暴露的 CSV 文件路径，默认 `translations.csv`
-
-### 示例
-
-- 使用默认文件名启动：`python tag-translation-server.py`
-- 指定文件启动：`python tag-translation-server.py --csv E:\\tags\\danbooru.csv`
-- 指定端口启动：`python tag-translation-server.py --port 9000 --csv translations.csv`
-
-## 使用方法
-
-1. 打开 Danbooru 帖子页
-2. 点击右下角 `传送到 Hydrus`
-3. 脚本会自动执行：
-   - 拉取帖子元数据
-   - 下载原图
-   - 上传到 Hydrus
-   - 写入标签
-   - 关联帖子 URL
-
-### 批量导入当前页
-
-1. 打开 `Danbooru` 的帖子列表页，例如 `https://danbooru.donmai.us/posts?page=2&tags=ordfav%3Aaxijx`
-2. 点击右下角 `批量导入本页`
-3. 确认后，脚本会按当前页顺序逐张导入这一页的帖子
-4. 导入完成后会提示成功数和失败数
+- PMTagger 服务配置
+- PMDanBooruSpider 用法
+- PMImageSpider 用法
